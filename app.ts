@@ -1,4 +1,4 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express, { Request, Response, NextFunction, request } from 'express';
 import 'express-async-errors';
 import cors from 'cors';
 import axios from 'axios';
@@ -6,6 +6,8 @@ import dotenv from 'dotenv';
 import swaggerJSDoc from 'swagger-jsdoc';
 import swaggerUi from 'swagger-ui-express';
 import morgan from 'morgan';
+import { google } from 'googleapis';
+import { SpacesServiceClient } from '@google-apps/meet';
 
 //#region App Setup
 const app = express();
@@ -57,10 +59,101 @@ app.use(morgan('dev'));
 //#region Keys and Configs
 const PORT = process.env.PORT || 3000;
 const baseURL = 'https://httpbin.org';
+interface IGoogleOauth2Credentials {
+  web: {
+    client_id: string;
+    project_id: string;
+    auth_uri: string;
+    token_uri: string;
+    auth_provider_x509_cert_url: string;
+    client_secret: string;
+    javascript_origins: [string];
+  };
+}
+const GOOGLE_OAUTH2_CREDENTIALS: IGoogleOauth2Credentials = JSON.parse(
+  process.env.GOOGLE_OAUTH2_CREDENTIALS || '{}'
+);
+const SCOPE = ['https://www.googleapis.com/auth/meetings.space.created'];
+const REDIRECT_URI = 'http://localhost:5000/oauth2callback';
+const auth = new google.auth.OAuth2({
+  clientId: GOOGLE_OAUTH2_CREDENTIALS.web.client_id,
+  clientSecret: GOOGLE_OAUTH2_CREDENTIALS.web.client_secret,
+  redirectUri: REDIRECT_URI,
+});
+let authToken: any = null;
+
 //#endregion
 
 //#region Code here
-console.log('Hello world');
+
+/**
+ * Creates a new meeting space.
+ * @param {OAuth2Client} authClient An authorized OAuth2 client.
+ */
+async function createSpace(authClient: any) {
+  const meetClient = new SpacesServiceClient({
+    authClient: authClient,
+  });
+  // Construct request
+  const request = {};
+
+  // Run request
+  const response = await meetClient.createSpace(request);
+  console.log(`Meet URL: ${response[0].meetingUri}`);
+  return response;
+}
+
+// Generate an authentication URL
+/**
+ * @swagger
+ * /auth:
+ *   get:
+ *     summary: Start Authentication. Use this route in the browser directly
+ *     tags: [Auth]
+ */
+app.get('/auth', (req: Request, res: Response) => {
+  const authUrl = auth.generateAuthUrl({
+    access_type: 'offline',
+    scope: SCOPE,
+  });
+
+  res.redirect(authUrl);
+});
+
+// Handle OAuth2 callback
+app.get('/oauth2callback', async (req: Request, res: Response) => {
+  const code = req.query.code as string;
+
+  try {
+    const { tokens } = await auth.getToken(code);
+    auth.setCredentials(tokens);
+
+    authToken = tokens;
+    res.send({ message: 'Login successful, carry on from the docs' });
+  } catch (error) {
+    console.error('Error handling OAuth callback:', error);
+    res.status(500).send('Authentication failed');
+  }
+});
+
+/**
+ * @swagger
+ * /:
+ *   post:
+ *     summary: Create a new meeting space
+ *     description:
+ *     tags: [Meet]
+ *     responses:
+ *       '200':
+ *         description: Successful.
+ *       '400':
+ *         description: Bad request.
+ */
+app.post('/', async (req: Request, res: Response) => {
+  const data = await createSpace(auth);
+  return res.send({ message: 'Space created successfully!', data });
+});
+
 //#endregion
 
 //#region Server Setup
