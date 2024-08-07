@@ -1,4 +1,4 @@
-import express, { Request, Response, NextFunction, request } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import 'express-async-errors';
 import cors from 'cors';
 import axios from 'axios';
@@ -6,8 +6,11 @@ import dotenv from 'dotenv';
 import swaggerJSDoc from 'swagger-jsdoc';
 import swaggerUi from 'swagger-ui-express';
 import morgan from 'morgan';
+import cookieParser from 'cookie-parser';
 import { google } from 'googleapis';
 import { SpacesServiceClient } from '@google-apps/meet';
+import { auth } from 'google-auth-library';
+import { authenticate } from '@google-cloud/local-auth';
 
 //#region App Setup
 const app = express();
@@ -50,6 +53,7 @@ const swaggerSpec = swaggerJSDoc(SWAGGER_OPTIONS);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 app.use(cors());
 app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use(morgan('dev'));
@@ -75,12 +79,12 @@ const GOOGLE_OAUTH2_CREDENTIALS: IGoogleOauth2Credentials = JSON.parse(
 );
 const SCOPE = ['https://www.googleapis.com/auth/meetings.space.created'];
 const REDIRECT_URI = 'http://localhost:5000/oauth2callback';
-const auth = new google.auth.OAuth2({
-  clientId: GOOGLE_OAUTH2_CREDENTIALS.web.client_id,
-  clientSecret: GOOGLE_OAUTH2_CREDENTIALS.web.client_secret,
-  redirectUri: REDIRECT_URI,
-});
-let authToken: any = null;
+// const auth = new google.auth.OAuth2(
+//   GOOGLE_OAUTH2_CREDENTIALS.web.client_id,
+//   GOOGLE_OAUTH2_CREDENTIALS.web.client_secret,
+//   REDIRECT_URI
+// );
+const authenticationToken: any = '';
 
 //#endregion
 
@@ -103,6 +107,22 @@ async function createSpace(authClient: any) {
   return response;
 }
 
+// async function getToken(code: string) {
+//   const { tokens } = await auth.getToken(code);
+//   auth.setCredentials(tokens);
+
+//   return tokens;
+// }
+
+async function quickstart() {
+  const localAuth = await authenticate({
+    scopes: SCOPE,
+    keyfilePath: './client_secret.json',
+  });
+  console.log('Tokens:', localAuth.credentials);
+  return localAuth.credentials;
+}
+
 // Generate an authentication URL
 /**
  * @swagger
@@ -111,30 +131,32 @@ async function createSpace(authClient: any) {
  *     summary: Start Authentication. Use this route in the browser directly
  *     tags: [Auth]
  */
-app.get('/auth', (req: Request, res: Response) => {
-  const authUrl = auth.generateAuthUrl({
-    access_type: 'offline',
-    scope: SCOPE,
+app.get('/auth', async (req: Request, res: Response) => {
+  const token = await authenticate({
+    scopes: SCOPE,
+    keyfilePath: './client_secret.json',
   });
+  console.log(token.credentials);
+  res.cookie('token', token.credentials, { maxAge: 24 * 60 * 60 * 1000 });
 
-  res.redirect(authUrl);
+  return res.send({ success: true });
+
+  // const authUrl = auth.generateAuthUrl({
+  //   access_type: 'offline',
+  //   scope: SCOPE,
+  // });
+
+  // res.redirect(authUrl);
 });
 
 // Handle OAuth2 callback
-app.get('/oauth2callback', async (req: Request, res: Response) => {
-  const code = req.query.code as string;
+// app.get('/oauth2callback', async (req: Request, res: Response) => {
+//   const code = req.query.code as string;
+//   const token = await getToken(code);
 
-  try {
-    const { tokens } = await auth.getToken(code);
-    auth.setCredentials(tokens);
-
-    authToken = tokens;
-    res.send({ message: 'Login successful, carry on from the docs' });
-  } catch (error) {
-    console.error('Error handling OAuth callback:', error);
-    res.status(500).send('Authentication failed');
-  }
-});
+//   res.cookie('token', token, { maxAge: 24 * 60 * 60 * 1000 }); // Cookie expires after 1 day
+//   res.send({ message: 'Login successful, carry on from the docs' });
+// });
 
 /**
  * @swagger
@@ -150,7 +172,14 @@ app.get('/oauth2callback', async (req: Request, res: Response) => {
  *         description: Bad request.
  */
 app.post('/', async (req: Request, res: Response) => {
-  const data = await createSpace(auth);
+  console.log(req.cookies['token']);
+  const authToken = req.cookies['token'];
+  if (!authToken)
+    return res.status(400).send({ success: false, message: 'Login first' });
+
+  const client = auth.fromJSON(authToken);
+
+  const data = await createSpace(client);
   return res.send({ message: 'Space created successfully!', data });
 });
 
@@ -235,7 +264,7 @@ app.use((req: Request, res: Response) => {
 
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   // throw Error('This is a sample error');
-
+  console.log(err);
   console.log(`${'\x1b[31m'}${err.message}${'\x1b][0m]'} `);
   return res
     .status(500)
