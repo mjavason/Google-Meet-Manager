@@ -61,28 +61,29 @@ app.use(morgan('dev'));
 //#region Keys and Configs
 const PORT = process.env.PORT || 3000;
 const baseURL = 'https://httpbin.org';
-interface IGoogleOauth2Credentials {
-  web: {
-    client_id: string;
-    project_id: string;
-    auth_uri: string;
-    token_uri: string;
-    auth_provider_x509_cert_url: string;
-    client_secret: string;
-    javascript_origins: [string];
-  };
+interface IServiceAccountCredentials {
+  type: string;
+  project_id: string;
+  private_key_id: string;
+  private_key: string;
+  client_email: string;
+  client_id: string;
+  auth_url: string;
+  token_url: string;
+  auth_provider_x509_cert_url: string;
+  client_x509_cert_url: string;
+  universe_domain: string;
 }
-const GOOGLE_OAUTH2_CREDENTIALS: IGoogleOauth2Credentials = JSON.parse(
-  process.env.GOOGLE_OAUTH2_CREDENTIALS || '{}'
+const SERVICE_ACCOUNT_CREDENTIALS: IServiceAccountCredentials = JSON.parse(
+  process.env.SERVICE_ACCOUNT_CREDENTIALS || '{}'
 );
 const SCOPE = ['https://www.googleapis.com/auth/meetings.space.created'];
-const REDIRECT_URI = 'http://localhost:5000/oauth2callback';
-const OAuth2 = new google.auth.OAuth2(
-  GOOGLE_OAUTH2_CREDENTIALS.web.client_id,
-  GOOGLE_OAUTH2_CREDENTIALS.web.client_secret,
-  REDIRECT_URI
-);
-
+const jwtClient = new google.auth.JWT({
+  email: SERVICE_ACCOUNT_CREDENTIALS.client_email,
+  key: SERVICE_ACCOUNT_CREDENTIALS.private_key,
+  scopes: SCOPE,
+  subject: 'orjimichael2240@gmail.com', // this email should be part of your workspace account
+});
 //#endregion
 
 //#region Code here
@@ -91,51 +92,21 @@ const OAuth2 = new google.auth.OAuth2(
  * Creates a new meeting space.
  * @param {OAuth2Client} authClient An authorized OAuth2 client.
  */
-async function createSpace(authClient: any) {
-  const meetClient = new SpacesServiceClient({
-    authClient: authClient,
-  });
-  // Construct request
-  const request = {};
+async function createSpace() {
+  const meetClient = new SpacesServiceClient({ authClient: jwtClient });
+  const request = {
+    space: {
+      config: {
+        accessType: 1, // for open access to meeting link
+      },
+    },
+  };
 
   // Run request
   const response = await meetClient.createSpace(request);
   console.log(`Meet URL: ${response[0].meetingUri}`);
   return response;
 }
-
-async function getToken(code: string) {
-  const { tokens } = await OAuth2.getToken(code);
-  OAuth2.setCredentials(tokens);
-
-  return tokens;
-}
-
-// Generate an authentication URL
-/**
- * @swagger
- * /auth:
- *   get:
- *     summary: Start Authentication. Use this route in the browser directly
- *     tags: [Auth]
- */
-app.get('/auth', async (req: Request, res: Response) => {
-  const authUrl = OAuth2.generateAuthUrl({
-    access_type: 'offline',
-    scope: SCOPE,
-  });
-
-  res.redirect(authUrl);
-});
-
-// Handle OAuth2 callback
-app.get('/oauth2callback', async (req: Request, res: Response) => {
-  const code = req.query.code as string;
-  const token = await getToken(code);
-
-  res.cookie('token', token, { maxAge: 24 * 60 * 60 * 1000 }); // Cookie expires after 1 day
-  res.send({ message: 'Login successful, carry on from the docs' });
-});
 
 /**
  * @swagger
@@ -151,14 +122,7 @@ app.get('/oauth2callback', async (req: Request, res: Response) => {
  *         description: Bad request.
  */
 app.post('/', async (req: Request, res: Response) => {
-  console.log(req.cookies['token']);
-  const authToken = req.cookies['token'];
-  if (!authToken)
-    return res.status(400).send({ success: false, message: 'Login first' });
-
-  const client = google.auth.fromJSON(authToken);
-
-  const data = await createSpace(client);
+  const data = await createSpace();
   return res.send({ message: 'Space created successfully!', data });
 });
 
