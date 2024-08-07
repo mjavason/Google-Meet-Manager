@@ -9,8 +9,6 @@ import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
 import { google } from 'googleapis';
 import { SpacesServiceClient } from '@google-apps/meet';
-import { auth } from 'google-auth-library';
-import { authenticate } from '@google-cloud/local-auth';
 
 //#region App Setup
 const app = express();
@@ -79,12 +77,11 @@ const GOOGLE_OAUTH2_CREDENTIALS: IGoogleOauth2Credentials = JSON.parse(
 );
 const SCOPE = ['https://www.googleapis.com/auth/meetings.space.created'];
 const REDIRECT_URI = 'http://localhost:5000/oauth2callback';
-// const auth = new google.auth.OAuth2(
-//   GOOGLE_OAUTH2_CREDENTIALS.web.client_id,
-//   GOOGLE_OAUTH2_CREDENTIALS.web.client_secret,
-//   REDIRECT_URI
-// );
-const authenticationToken: any = '';
+const OAuth2 = new google.auth.OAuth2(
+  GOOGLE_OAUTH2_CREDENTIALS.web.client_id,
+  GOOGLE_OAUTH2_CREDENTIALS.web.client_secret,
+  REDIRECT_URI
+);
 
 //#endregion
 
@@ -107,20 +104,11 @@ async function createSpace(authClient: any) {
   return response;
 }
 
-// async function getToken(code: string) {
-//   const { tokens } = await auth.getToken(code);
-//   auth.setCredentials(tokens);
+async function getToken(code: string) {
+  const { tokens } = await OAuth2.getToken(code);
+  OAuth2.setCredentials(tokens);
 
-//   return tokens;
-// }
-
-async function quickstart() {
-  const localAuth = await authenticate({
-    scopes: SCOPE,
-    keyfilePath: './client_secret.json',
-  });
-  console.log('Tokens:', localAuth.credentials);
-  return localAuth.credentials;
+  return tokens;
 }
 
 // Generate an authentication URL
@@ -132,31 +120,22 @@ async function quickstart() {
  *     tags: [Auth]
  */
 app.get('/auth', async (req: Request, res: Response) => {
-  const token = await authenticate({
-    scopes: SCOPE,
-    keyfilePath: './client_secret.json',
+  const authUrl = OAuth2.generateAuthUrl({
+    access_type: 'offline',
+    scope: SCOPE,
   });
-  console.log(token.credentials);
-  res.cookie('token', token.credentials, { maxAge: 24 * 60 * 60 * 1000 });
 
-  return res.send({ success: true });
-
-  // const authUrl = auth.generateAuthUrl({
-  //   access_type: 'offline',
-  //   scope: SCOPE,
-  // });
-
-  // res.redirect(authUrl);
+  res.redirect(authUrl);
 });
 
 // Handle OAuth2 callback
-// app.get('/oauth2callback', async (req: Request, res: Response) => {
-//   const code = req.query.code as string;
-//   const token = await getToken(code);
+app.get('/oauth2callback', async (req: Request, res: Response) => {
+  const code = req.query.code as string;
+  const token = await getToken(code);
 
-//   res.cookie('token', token, { maxAge: 24 * 60 * 60 * 1000 }); // Cookie expires after 1 day
-//   res.send({ message: 'Login successful, carry on from the docs' });
-// });
+  res.cookie('token', token, { maxAge: 24 * 60 * 60 * 1000 }); // Cookie expires after 1 day
+  res.send({ message: 'Login successful, carry on from the docs' });
+});
 
 /**
  * @swagger
@@ -177,7 +156,7 @@ app.post('/', async (req: Request, res: Response) => {
   if (!authToken)
     return res.status(400).send({ success: false, message: 'Login first' });
 
-  const client = auth.fromJSON(authToken);
+  const client = google.auth.fromJSON(authToken);
 
   const data = await createSpace(client);
   return res.send({ message: 'Space created successfully!', data });
